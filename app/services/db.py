@@ -51,9 +51,9 @@ def save_article_analysis(article_id: str, text: str, analysis_result: Dict[Any,
             article_data = {
                 'article_id': article_id,
                 'text': text,
-                'ai_score': analysis_result['score'],
-                'ai_label': analysis_result['label'],
-                'ai_explanation': analysis_result['explanation'],
+                'score': analysis_result['score'],
+                'label': analysis_result['label'],
+                'explanation': analysis_result['explanation'],
                 'created_at': firestore.SERVER_TIMESTAMP
             }
             db.collection('articles').document(article_id).set(article_data)
@@ -62,6 +62,27 @@ def save_article_analysis(article_id: str, text: str, analysis_result: Dict[Any,
             print(f"🔄 Article analysé (mock): {article_id}")
     except Exception as e:
         print(f"❌ Erreur lors de la sauvegarde de l'analyse: {e}")
+
+
+def get_article_analysis(article_id: str) -> Optional[Dict[str, Any]]:
+    """Récupérer l'analyse d'un article"""
+    try:
+        if db:
+            article_ref = db.collection('articles').document(article_id)
+            article = article_ref.get()
+            if article.exists:
+                article_dict = article.to_dict()
+                return {
+                    "score": article_dict.get("score"),
+                    "label": article_dict.get("label"),
+                    "explanation": article_dict.get("explanation"),
+                }
+            else:
+                print(f"⚠️  Article non trouvé: {article_id}")
+                return None
+    except Exception as e:
+        print(f"❌ Erreur lors de la récupération de l'analyse: {e}")
+        return None
 
 
 def get_article_votes(article_id: str) -> Dict[str, int]:
@@ -93,3 +114,17 @@ def get_article_votes(article_id: str) -> Dict[str, int]:
     except Exception as e:
         print(f"❌ Erreur lors de la récupération des votes: {e}")
         return {'positive': 0, 'negative': 0, 'total': 0}
+
+
+def get_user_vote_count(user_id: str) -> int:
+    """Get total number of votes made by a user"""
+    try:
+        if db:
+            votes_ref = db.collection('votes').where('user_id', '==', user_id)
+            votes = votes_ref.stream()
+            return len(list(votes))
+        else:
+            return 0
+    except Exception as e:
+        print(f"❌ Error getting user vote count: {e}")
+        return 0

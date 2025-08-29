@@ -85,8 +85,14 @@ Récupère les votes d'un article
 
 ## Jour 2 ✅
 
--   [x] Intégration analyse de patterns textuels
--   [x] Support API HuggingFace (optionnel)
+-   [x] Model HuggingFace
 -   [x] Normalisation scores en 3 niveaux
--   [x] Explications détaillées
+-   [x] Explications basiques
 -   [x] Sauvegarde des analyses
+
+## Jour 3 ✅
+
+-   [x] Système de vote
+-   [x] Endpoint récupération votes
+-   [x] Récupération des votes d'un utilisateur
+-   [x] Explications avec Gemini
