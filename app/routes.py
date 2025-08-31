@@ -9,25 +9,45 @@ router = APIRouter()
 
 @router.post("/analyze", response_model=AnalyzeResponse)
 async def analyze_article(request: AnalyzeRequest):
-
+    """
+    Analyze an article for fact-checking
+    Returns existing analysis with community data if available, 
+    otherwise performs new analysis
+    """
     # Générer un ID unique pour l'article basé sur le contenu
     article_id = hashlib.md5(request.text.encode()).hexdigest()
-    result = db.get_article_analysis(article_id)
-    if result:
-        # Si l'analyse existe déjà, on la renvoie
-        return result
 
+    # Vérifier si l'analyse existe déjà
+    existing_analysis = analyzer.get_article_with_community_data(article_id)
+
+    if existing_analysis:
+        # Si l'analyse existe déjà, on la renvoie avec toutes les données communautaires
+        print(f"✅ Article existant trouvé: {article_id}")
+        return AnalyzeResponse(**existing_analysis)
+
+    # Sinon, on effectue une nouvelle analyse
+    print(f"🆕 Nouvelle analyse pour: {article_id}")
     result = await analyzer.analyze_text(request.text)
 
     # Sauvegarder l'analyse en base
     db.save_article_analysis(article_id, request.text, result)
 
-    return result
+    # Retourner les résultats avec les champs communautaires initialisés
+    return AnalyzeResponse(
+        article_id=article_id,
+        score=result['score'],
+        label=result['label'],
+        explanation=result['explanation'],
+        community_score=None,  # Pas encore de votes
+        positive_votes=0,
+        negative_votes=0,
+        total_votes=0
+    )
 
 
 @router.post("/vote")
 async def vote_article(request: VoteRequest):
-    article_id = hashlib.md5(request.text.encode()).hexdigest()
+    article_id = request.article_id
     db.save_vote(article_id, request.user_id, request.vote)
     return {"status": "vote saved"}
 

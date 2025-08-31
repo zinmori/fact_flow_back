@@ -73,6 +73,7 @@ def get_article_analysis(article_id: str) -> Optional[Dict[str, Any]]:
             if article.exists:
                 article_dict = article.to_dict()
                 return {
+                    "article_id": article_id,
                     "score": article_dict.get("score"),
                     "label": article_dict.get("label"),
                     "explanation": article_dict.get("explanation"),

@@ -1,4 +1,5 @@
 from pydantic import BaseModel
+from typing import Optional
 
 
 class AnalyzeRequest(BaseModel):
@@ -6,9 +7,14 @@ class AnalyzeRequest(BaseModel):
 
 
 class AnalyzeResponse(BaseModel):
+    article_id: str
     score: float
     label: str
     explanation: str
+    community_score: Optional[float] = None
+    positive_votes: int = 0
+    negative_votes: int = 0
+    total_votes: int = 0
 
 
 class ArticleResponse(BaseModel):
@@ -23,5 +29,5 @@ class ArticleResponse(BaseModel):
 
 class VoteRequest(BaseModel):
     user_id: str
-    text: str
+    article_id: str
     vote: int  # 1 = credible, -1 = fake

@@ -1,186 +1,391 @@
-# --- Day 2: NLP Analyzer with HuggingFace ---
-from transformers import pipeline
+# --- Fact-Flow Backend: AI-Powered Fact Checker with Gemini ---
 from typing import Dict, Any
 from dotenv import load_dotenv
 from google import genai
 import os
-from openai import OpenAI
+import re
+from datetime import datetime
 from . import db
 
 load_dotenv()
 
 client = genai.Client()
 
-
-# Thresholds for Green/Yellow/Red labels based on model confidence
+# Thresholds for Green/Yellow/Red labels based on analysis confidence
 CONFIDENCE_THRESHOLDS = {
     "high": 0.80,    # Score > 0.80 = very confident
     "medium": 0.65   # Score between 0.65-0.80 = moderately confident
 }
 
-MODEL = "jy46604790/Fake-News-Bert-Detect"
-clf = pipeline("text-classification", model=MODEL, tokenizer=MODEL)
 
-
-async def get_detailed_explanation(text: str, label: str) -> str:
+def clean_content(raw_content: str) -> str:
     """
-    Get a detailed explanation from the external LLM on why the text 
-    might be reliable or not
+    Clean and extract main content from raw text (inner text from web pages)
+    Remove navigation, ads, footers, and other irrelevant content
     """
-
     try:
-        # Build the prompt according to the label
-        if label == "Green":
-            prompt = f"""Analyze this text and explain why it appears to be reliable/true information. 
-            Identify elements that reinforce its credibility (sources, structure, coherence, etc.).
-            
-            Text: "{text}"
-            
-            Provide a short and precise explanation (2-3 sentences max) on the reasons for reliability."""
+        # Clean up extra whitespace first
+        content = re.sub(r'\s+', ' ', raw_content).strip()
 
-        elif label == "Red":
-            prompt = f"""Analyze this text and explain why it could be disinformation or fake news.
-            Identify warning signs (unsourced claims, excessive emotional language, inconsistencies, etc.).
-            
-            Text: "{text}"
-            
-            Provide a short and precise explanation (2-3 sentences max) on the reasons for suspicion."""
+        # Common patterns to remove (navigation, ads, etc.)
+        patterns_to_remove = [
+            # Navigation patterns
+            r'Accueil.*?Contact',
+            r'Menu.*?Rechercher',
+            r'Navigation.*?principal',
 
-        else:  # Yellow
-            prompt = f"""Analyze this text and explain why its authenticity is difficult to determine.
-            Identify ambiguous elements that require additional verification.
-            
-            Text: "{text}"
-            
-            Provide a short and precise explanation (2-3 sentences max) on why we should remain cautious."""
+            # Footer patterns
+            r'Tous droits réservés.*?$',
+            r'Copyright.*?$',
+            r'©.*?\d{4}.*?$',
+
+            # Ad patterns
+            r'Publicité.*?',
+            r'Annonce.*?',
+            r'Sponsorisé.*?',
+
+            # Cookie/GDPR patterns
+            r'Nous utilisons des cookies.*?Accepter',
+            r'Ce site utilise.*?cookies.*?',
+            r'Politique de confidentialité.*?',
+
+            # Social media patterns
+            r'Partager sur.*?Facebook.*?Twitter.*?',
+            r'Suivez-nous.*?',
+            r'Abonnez-vous.*?',
+
+            # Newsletter patterns
+            r'S\'abonner.*?newsletter.*?',
+            r'Recevez.*?actualités.*?',
+
+            # Comment patterns
+            r'Commentaires.*?Laisser.*?commentaire',
+            r'\d+\s+commentaires?.*?',
+        ]
+
+        # Remove common unwanted patterns
+        for pattern in patterns_to_remove:
+            content = re.sub(pattern, '', content,
+                             flags=re.IGNORECASE | re.DOTALL)
+
+        # Remove lines that are likely navigation or boilerplate
+        lines = content.split('\n')
+        cleaned_lines = []
+
+        for line in lines:
+            line = line.strip()
+            if len(line) < 10:  # Skip very short lines
+                continue
+
+            # Skip lines that look like navigation
+            nav_indicators = [
+                'menu', 'navigation', 'accueil', 'contact', 'recherche',
+                'connexion', 'inscription', 'mon compte'
+            ]
+            if any(indicator in line.lower() for indicator in nav_indicators) and len(line) < 50:
+                continue
+
+            # Skip lines that are likely timestamps without content
+            if re.match(r'^\d{1,2}[:/]\d{1,2}[:/]\d{2,4}.*?$', line) and len(line) < 30:
+                continue
+
+            # Skip lines with only social media or sharing text
+            social_patterns = ['partager', 'twitter',
+                               'facebook', 'linkedin', 'whatsapp']
+            if any(pattern in line.lower() for pattern in social_patterns) and len(line) < 30:
+                continue
+
+            cleaned_lines.append(line)
+
+        # Rejoin and clean up
+        cleaned_content = ' '.join(cleaned_lines)
+        cleaned_content = re.sub(r'\s+', ' ', cleaned_content).strip()
+
+        # If content is too short after cleaning, return original (might be too aggressive)
+        if len(cleaned_content) < len(content) * 0.3:
+            return content
+
+        return cleaned_content
+
+    except Exception as e:
+        print(f"Error cleaning content: {e}")
+        return raw_content
+
+
+async def analyze_with_gemini(content: str) -> Dict[str, Any]:
+    """
+    Analyze content using Gemini AI model for fact-checking
+    Handles raw text content from web pages
+    """
+    try:
+        # Clean the raw content to focus on main information
+        cleaned_content = clean_content(content)
+
+        # Get current date for context
+        current_date = datetime.now().strftime("%Y-%m-%d")
+
+        # Build comprehensive prompt for fact-checking analysis
+        prompt = f"""Tu es un expert en vérification des faits (fact-checker) professionnel. Tu dois analyser le contenu suivant et déterminer sa fiabilité.
+
+CONTEXTE IMPORTANT:
+- Date d'aujourd'hui: {current_date} (Ce n'est pas la date de l'article)
+- Tu reçois le contenu textuel complet d'une page web qui peut contenir des éléments inutiles (menus, publicités, etc.)
+- Concentre-toi sur l'article ou l'information principale
+- Ignore les éléments de navigation, publicités, commentaires, etc.
+
+CONTENU À ANALYSER:
+{cleaned_content}
+
+INSTRUCTIONS:
+1. Identifie l'article ou information principale dans ce contenu
+2. Évalue la fiabilité de cette information en analysant:
+   - Sources citées et leur crédibilité
+   - Cohérence des faits présentés
+   - Présence de biais ou manipulation
+   - Véracité des affirmations factuelles
+   - Qualité du journalisme/rédaction
+   - Contexte temporel et pertinence
+
+3. Attribue un score de fiabilité de 0 à 1:
+   - 0.0-0.39: Information probablement fausse/trompeuse (Rouge)
+   - 0.4-0.74: Information incertaine, nécessite vérification (Jaune)  
+   - 0.75-1.0: Information probablement fiable (Vert)
+
+4. Fournis une explication claire et concise (2-3 phrases) justifiant ton évaluation
+
+RÉPONSE REQUISE (format JSON):
+{{
+    "score": [score numérique entre 0 et 1],
+    "label": "[Green/Yellow/Red]",
+    "explanation": "[explication de 2-3 phrases]",
+    "main_topic": "[sujet principal identifié]"
+}}
+
+Réponds uniquement avec le JSON, sans autres commentaires."""
 
         response = client.models.generate_content(
             model="gemini-2.5-flash",
-            contents=f"You are a fact-checking expert. Respond concisely and factually. {prompt}",
+            contents=prompt,
         )
 
-        print(response.text)
-        return response.text
+        print(f"🤖 Gemini analysis: {response.text}")
+
+        # Parse JSON response
+        import json
+        try:
+            # Clean the response text before parsing
+            raw_response = response.text.strip()
+
+            # Remove potential markdown code blocks if present
+            if raw_response.startswith('```json'):
+                raw_response = raw_response.replace(
+                    '```json', '').replace('```', '').strip()
+            elif raw_response.startswith('```'):
+                raw_response = raw_response.replace('```', '').strip()
+
+            # Try to extract JSON if it's embedded in other text
+            json_start = raw_response.find('{')
+            json_end = raw_response.rfind('}') + 1
+
+            if json_start != -1 and json_end > json_start:
+                json_text = raw_response[json_start:json_end]
+            else:
+                json_text = raw_response
+
+            print(f"🔍 Attempting to parse JSON: {json_text}")
+
+            # Parse the JSON
+            result = json.loads(json_text)
+
+            # Validate and normalize the response
+            score = float(result.get('score', 0.5))
+            # Ensure score is between 0 and 1
+            score = max(0.0, min(1.0, score))
+
+            label = result.get('label', 'Yellow')
+            if label not in ['Green', 'Yellow', 'Red']:
+                label = 'Yellow'
+
+            explanation = result.get(
+                'explanation', 'Analyse effectuée avec succès')
+            main_topic = result.get('main_topic', 'Non spécifié')
+
+            # Determine confidence based on score
+            if score >= CONFIDENCE_THRESHOLDS["high"] or score <= (1 - CONFIDENCE_THRESHOLDS["high"]):
+                confidence = "high"
+            elif score >= CONFIDENCE_THRESHOLDS["medium"] or score <= (1 - CONFIDENCE_THRESHOLDS["medium"]):
+                confidence = "medium"
+            else:
+                confidence = "low"
+
+            print(f"✅ JSON parsing successful!")
+            return {
+                "score": round(score, 2),
+                "label": label,
+                "explanation": explanation,
+                "confidence": confidence,
+                "main_topic": main_topic,
+                "api_available": True
+            }
+
+        except json.JSONDecodeError as e:
+            print(f"❌ Error parsing Gemini JSON response: {e}")
+            print(f"Raw response length: {len(response.text)}")
+            print(f"Raw response (first 500 chars): {response.text[:500]}")
+            print(f"Raw response (last 200 chars): {response.text[-200:]}")
+
+            # Try alternative parsing approaches
+            try:
+                # Method 1: Try to fix common JSON issues
+                fixed_text = response.text.strip()
+
+                # Fix potential issues with quotes
+                fixed_text = re.sub(
+                    r'(?<!\\)"([^"]*)"(?=\s*:)', r'"\1"', fixed_text)
+
+                # Try parsing again
+                result = json.loads(fixed_text)
+
+                score = float(result.get('score', 0.5))
+                score = max(0.0, min(1.0, score))
+                label = result.get('label', 'Yellow')
+                explanation = result.get(
+                    'explanation', 'Analyse effectuée avec parsing alternatif')
+
+                print(f"✅ Alternative JSON parsing successful!")
+                return {
+                    "score": round(score, 2),
+                    "label": label,
+                    "explanation": explanation,
+                    "confidence": "medium",
+                    "api_available": True
+                }
+
+            except:
+                print("❌ Alternative parsing also failed")
+
+            # Fallback: try to extract information manually using regex
+            print("🔄 Falling back to regex extraction...")
+            text_response = response.text
+
+            try:
+                # Extract score using regex
+                score_match = re.search(r'"score":\s*([0-9.]+)', text_response)
+                score = float(score_match.group(1)) if score_match else 0.5
+
+                # Extract label using regex
+                label_match = re.search(
+                    r'"label":\s*"(Green|Yellow|Red)"', text_response)
+                label = label_match.group(1) if label_match else 'Yellow'
+
+                # Extract explanation using regex
+                explanation_match = re.search(
+                    r'"explanation":\s*"([^"]+)"', text_response)
+                explanation = explanation_match.group(
+                    1) if explanation_match else "Analyse effectuée avec extraction regex"
+
+                print(
+                    f"✅ Regex extraction successful: score={score}, label={label}")
+                return {
+                    "score": round(score, 2),
+                    "label": label,
+                    "explanation": explanation,
+                    "confidence": "medium",
+                    "api_available": True
+                }
+
+            except Exception as regex_error:
+                print(f"❌ Regex extraction failed: {regex_error}")
+
+            # Final fallback: analyze text content
+            text_lower = response.text.lower()
+
+            if any(word in text_lower for word in ['fiable', 'vrai', 'green', 'crédible']):
+                return {
+                    "score": 0.8,
+                    "label": "Green",
+                    "explanation": "L'analyse Gemini suggère que le contenu est fiable (analyse textuelle).",
+                    "confidence": "medium",
+                    "api_available": True
+                }
+            elif any(word in text_lower for word in ['faux', 'trompeur', 'red', 'suspect']):
+                return {
+                    "score": 0.2,
+                    "label": "Red",
+                    "explanation": "L'analyse Gemini suggère que le contenu est suspect (analyse textuelle).",
+                    "confidence": "medium",
+                    "api_available": True
+                }
+            else:
+                return {
+                    "score": 0.5,
+                    "label": "Yellow",
+                    "explanation": "L'analyse Gemini nécessite une vérification supplémentaire (analyse textuelle).",
+                    "confidence": "low",
+                    "api_available": True
+                }
 
     except Exception as e:
-        print(f"⚠️ Error during LLM call: {e}")
-        return ""
-
-
-def interpret_model_result(result: list) -> Dict[str, Any]:
-    """
-    Interpret the HuggingFace model result
-    LABEL_0: Fake news, LABEL_1: Real news
-    The score represents the model's CONFIDENCE in its prediction (0-1)
-    Expected format: [{'label': 'LABEL_1', 'score': 0.9994995594024658}]
-    """
-    if not result or len(result) == 0:
+        print(f"⚠️ Erreur lors de l'analyse Gemini: {e}")
         return {
             "score": 0.5,
             "label": "Yellow",
-            "explanation": "Analysis error",
-            "confidence": "low"
-        }
-
-    prediction = result[0]
-    model_label = prediction['label']
-    model_confidence = prediction['score']  # Model confidence (0-1)
-
-    # Determine the model's prediction
-    is_fake_prediction = (model_label == "LABEL_0")
-    is_real_prediction = (model_label == "LABEL_1")
-
-    # Calculate the final score for our system (0 = fake, 1 = real)
-    if is_real_prediction:
-        # The model thinks it's real with X% confidence
-        final_score = 0.5 + (model_confidence - 0.5)  # Scale from 0.5 to 1
-    else:  # is_fake_prediction
-        # The model thinks it's fake with X% confidence
-        final_score = 0.5 - (model_confidence - 0.5)  # Scale from 0.5 to 0
-
-    # Ensure the score stays between 0 and 1
-    final_score = max(0.0, min(1.0, final_score))
-
-    # Determine the overall confidence level
-    if model_confidence >= CONFIDENCE_THRESHOLDS["high"]:
-        confidence = "high"
-    elif model_confidence >= CONFIDENCE_THRESHOLDS["medium"]:
-        confidence = "medium"
-    else:
-        confidence = "low"
-
-    # Determine the label based on the final score
-    if final_score >= 0.75:
-        label = "Green"
-    elif final_score >= 0.4:
-        label = "Yellow"
-    else:
-        label = "Red"
-
-    return {
-        "score": round(final_score, 2),
-        "label": label,
-        "confidence": confidence,
-        "model_details": {
-            "model_label": model_label,
-            "model_confidence": round(model_confidence, 3),
-            "prediction": "fake_news" if is_fake_prediction else "real_news"
-        }
-    }
-
-
-async def analyze_with_huggingface(text: str) -> Dict[str, Any]:
-    """Analyze text with the HuggingFace model (fake news detection)"""
-    try:
-        # Analysis with the local model
-        result = clf(text)
-        print(text)
-        print(f"🔍 Model result: {result}")
-
-        # Interpret the result
-        interpreted_result = interpret_model_result(result)
-
-        detailed_explanation = await get_detailed_explanation(
-            text,
-            interpreted_result["label"],
-        )
-
-        return {
-            **interpreted_result,
-            "explanation": detailed_explanation,
-            "api_available": True
-        }
-
-    except Exception as e:
-        print(f"⚠️  Model error: {e}")
-        return {
-            "score": 0.5,
-            "label": "Yellow",
-            "explanation": "Error during AI analysis",
+            "explanation": "Erreur lors de l'analyse IA - vérification manuelle recommandée",
             "confidence": "low",
             "api_available": False
         }
 
 
-async def analyze_text(text: str) -> Dict[str, Any]:
+async def analyze_text(content: str) -> Dict[str, Any]:
     """
     Main text analysis function
-    Uses the HuggingFace model to detect fake news
+    Uses Gemini AI to analyze content for fact-checking
+    Handles both HTML pages and plain text
     """
     # Basic verification
-    if not text or len(text.strip()) < 10:
+    if not content or len(content.strip()) < 10:
         return {
             "score": 0.5,
             "label": "Yellow",
-            "explanation": "Text too short for reliable analysis",
+            "explanation": "Contenu trop court pour une analyse fiable",
             "confidence": "low",
-            "model_details": None
+            "api_available": False
         }
 
-    # Analysis with the AI model
-    result = await analyze_with_huggingface(text)
+    # Analysis with Gemini AI
+    result = await analyze_with_gemini(content)
 
     return result
+
+
+def get_article_with_community_data(article_id: str) -> Dict[str, Any]:
+    """
+    Get article analysis with community data (votes and scores)
+    Returns None if article doesn't exist
+    """
+    # Get AI analysis
+    ai_analysis = db.get_article_analysis(article_id)
+    if not ai_analysis:
+        return None
+
+    # Get community votes
+    votes_data = db.get_article_votes(article_id)
+
+    # Calculate community score (None if no votes)
+    community_score = None
+    if votes_data['total'] > 0:
+        community_score = calculate_community_score(votes_data)
+
+    return {
+        "article_id": article_id,
+        "score": ai_analysis['score'],
+        "label": ai_analysis['label'],
+        "explanation": ai_analysis['explanation'],
+        "community_score": community_score,
+        "positive_votes": votes_data['positive'],
+        "negative_votes": votes_data['negative'],
+        "total_votes": votes_data['total']
+    }
 
 
 def calculate_community_score(votes_data: Dict[str, int]) -> float:
