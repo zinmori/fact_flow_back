@@ -88,3 +88,7 @@ instance/
 # VS Code
 .vscode/
 firebase.json
+
+# Uploaded files
+uploads/
+*.log

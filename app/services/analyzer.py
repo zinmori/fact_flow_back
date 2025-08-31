@@ -151,14 +151,14 @@ INSTRUCTIONS:
    - 0.4-0.74: Information incertaine, nécessite vérification (Jaune)  
    - 0.75-1.0: Information probablement fiable (Vert)
 
-4. Fournis une explication claire et concise (2-3 phrases) justifiant ton évaluation
+4. Fournis une explication claire et concise en anglais (2-3 phrases) justifiant ton évaluation
 
 RÉPONSE REQUISE (format JSON):
 {{
     "score": [score numérique entre 0 et 1],
     "label": "[Green/Yellow/Red]",
-    "explanation": "[explication de 2-3 phrases]",
-    "main_topic": "[sujet principal identifié]"
+    "explanation": "[explication de 2-3 phrases en anglais]",
+    "main_topic": "[sujet principal identifié en anglais]"
 }}
 
 Réponds uniquement avec le JSON, sans autres commentaires."""

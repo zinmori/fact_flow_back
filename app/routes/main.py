@@ -53,24 +53,24 @@ async def vote_article(request: VoteRequest):
     try:
         # Save the vote
         db.save_vote(request.article_id, request.user_id, request.vote)
-
+        
         # Reward user with points for voting
         points_awarded = 10  # Base points for voting
         db.add_points_to_user(
-            request.user_id,
-            points_awarded,
+            request.user_id, 
+            points_awarded, 
             f"Vote on article {request.article_id}"
         )
-
+        
         # Update user reputation based on their voting history
         db.update_user_reputation(request.user_id)
-
+        
         return {
             "status": "vote saved",
             "points_awarded": points_awarded,
             "message": f"Vote saved and {points_awarded} points awarded!"
         }
-
+        
     except Exception as e:
         print(f"❌ Error processing vote: {e}")
         return {"status": "error", "message": "Failed to process vote"}
